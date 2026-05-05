@@ -443,7 +443,10 @@ See the table at the end of this guide for browser-use vs Playwright tradeoffs. 
 | Bulk database operations | WP-CLI | Only tool that can do this |
 | Upload media | REST API | Simple multipart upload |
 | Change site settings | REST API or WP-CLI | Structured, atomic |
-| **tagDiv Composer editing** | **browser-use** | No API exists, pure JS UI |
+| **Newspaper theme logo** | **browser-use (tagDiv Composer)** | Change only via Composer UI — see https://forum.tagdiv.com/add-logo-newspaper/ |
+| **Newspaper header/footer style** | **browser-use (Theme Panel)** | Stored in `td_theme_options` — never edit directly |
+| **Newspaper colors/fonts** | **browser-use (Theme Panel)** | Theme Panel UI is the only safe way to change |
+| **tagDiv Composer page editing** | **browser-use** | No API exists, pure JS UI |
 | **Plugin setup wizards** | **browser-use** | Multi-step JavaScript wizards |
 | **Customizer changes** | **browser-use** | Iframe-based live preview, no REST endpoint for all controls |
 | **Gutenberg with complex blocks** | **browser-use** | Drag-and-drop block placement, column layouts, reusable blocks |

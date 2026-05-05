@@ -5,10 +5,30 @@
 - **Slug**: newspaper, td-composer
 - **Website**: https://themeforest.net/item/newspaper/5489609
 - **Documentation**: https://forum.tagdiv.com/
-- **Primary Interface**: WP Admin AJAX + tagDiv Cloud API + WP-CLI + WP REST API
+- **Primary Interface**: tagDiv Composer UI + Theme Panel (via browser-use) — NOT REST API or WP-CLI
+- **Documentation**: https://forum.tagdiv.com/ — all theme settings changes should follow the documented UI path
 
 ## What this theme does
 Newspaper is a premium WordPress theme designed for news, magazine, and blog sites. It includes the tagDiv Composer (drag-and-drop page builder) and the tagDiv Cloud Library (cloud-hosted templates). It uses custom post types for templates and extensive theme options.
+
+## CRITICAL: How to Modify Newspaper Theme Settings
+
+**Always use the tagDiv UI via browser-use for theme settings changes.** Never attempt to directly manipulate `td_theme_options` or other theme options via `wp option update` or the REST API. The Newspaper theme stores settings as complex nested JSON — hand-editing it will almost certainly corrupt the data.
+
+| Task | Correct Method | Wrong Method |
+|------|---------------|--------------|
+| Change logo | tagDiv Composer UI (browser-use) | `wp option update td_theme_options` |
+| Change header/footer style | Theme Panel → Header/Footer (browser-use) | `wp option update` |
+| Change theme colors | Theme Panel → Theme Colors (browser-use) | `wp option update` |
+| Change fonts | Theme Panel → Theme Fonts (browser-use) | `wp option update` |
+| Import/export theme settings | Theme Panel → Import/Export (browser-use) | Raw DB manipulation |
+| Category-specific settings | Theme Panel → Categories (browser-use) | `wp option update td_XXX` |
+| Install pre-built website | Theme Panel → Pre-built Websites (browser-use) | N/A |
+| Inspect current settings (read-only) | `wp option get td_theme_options --format=json` | N/A |
+| Manage templates (tdb_templates CPT) | REST API or WP-CLI | N/A |
+| Edit page layouts with Composer | tagDiv Composer UI (browser-use) | N/A |
+
+**For the agent**: When a user asks to change anything in the Newspaper theme (logo, colors, fonts, header style, footer, ads, etc.), your first question should be: "Is this something configured in the tagDiv Composer or Theme Panel?" If yes, use browser-use to navigate the UI. The tagDiv documentation at https://forum.tagdiv.com/ is the authoritative guide for all UI operations.
 
 ---
 
@@ -45,21 +65,23 @@ Newspaper does not create custom database tables. Its data is stored in:
 
 ---
 
-## Key Options (`wp_options` table)
+## Key Options (Read-Only Inspection)
+
+Use `wp option get` **only for inspecting/diagnosing** the current theme state. Never use `wp option update` to modify theme settings.
 
 ```bash
-# Theme Panel settings
+# INSPECTION ONLY — use these to check current state, not to modify
 wp option get td_theme_options --format=json
 wp option get tdc_version
 wp option get tds_white_menu            # Site-wide header style
 wp option get tds_footer_style          # Site-wide footer style
 
-# Category template assignments
+# Category template assignments (inspect only)
 wp option get td_011                     # Category ID 11 settings
 wp option get td_category_options --format=json
 ```
 
-The `td_theme_options` option contains a serialized/JSON array of all theme panel settings including logos, colors, typography, layout, ads, and API keys.
+The `td_theme_options` option contains a deeply nested JSON blob of all theme panel settings. Modifying this directly is error-prone and can break the theme. **To change any of these settings, use browser-use to navigate the tagDiv Theme Panel or Composer UI instead.**
 
 ---
 
@@ -177,254 +199,287 @@ wp option get tds_mobile_theme --format=json
 
 ---
 
-## Quick Reference: Common Tasks
+## Quick Reference: Common Tasks (browser-use)
 
-### Import a Cloud Template
-
-```bash
-# tagDiv Cloud templates have a template ID from the library
-# Import is typically done via the tagDiv API
-TEMPLATE_ID="12345"
-
-# Download the template content from tagDiv Cloud
-curl -s -H "Authorization: Bearer $TD_CLOUD_API_KEY" \
-  "https://cloud.tagdiv.com/api/v1/templates/$TEMPLATE_ID" | python3 -c "
-import json,sys
-t=json.load(sys.stdin)
-print(f'Template: {t[\"title\"]}')
-print(f'Type: {t[\"type\"]}')
-print(f'Content length: {len(t[\"content\"])} chars')"
-
-# Create a tdb_templates post with this content
-curl -s -X POST -u "$WP_USER:$WP_APP_PASSWORD" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"title\":\"Imported Header\",
-    \"content\":\"\",
-    \"status\":\"publish\",
-    \"meta\":{
-      \"tdb_template_type\":\"header\",
-      \"tdb_template_global\":$(echo "$TEMPLATE_CONTENT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
-    }
-  }" \
-  "$WP_SITE/wp-json/wp/v2/tdb_templates"
-```
-
-### Assign a Template Globally
-
-```bash
-# Assign a header template site-wide
-curl -s -X POST -u "$WP_USER:$WP_APP_PASSWORD" \
-  "$WP_SITE/wp-json/wp/v2/tdb_templates/{template_id}" \
-  -d '{"meta":{"tdb_template_global":"header"}}'
-
-# Alternatively via WP-CLI
-wp post meta update {template_id} tdb_template_type header
-wp post meta update {template_id} tdb_template_global 1
-```
+All Newspaper theme settings changes use browser-use to navigate the tagDiv UI. Follow the tagDiv documentation at https://forum.tagdiv.com/ for the exact UI steps. Below are browser-use task templates for common operations.
 
 ### Update Site Logo
 
-```bash
-# Upload the logo
-LOGO_ID=$(wp media import /path/to/new-logo.png --porcelain)
+Use browser-use to navigate the tagDiv Composer and modify the header logo element. The documented method is at https://forum.tagdiv.com/add-logo-newspaper/
 
-# Update theme options
-CURRENT_OPTS=$(wp option get td_theme_options --format=json)
-NEW_OPTS=$(echo "$CURRENT_OPTS" | python3 -c "
-import json,sys
-opts=json.load(sys.stdin)
-opts['tds_logo_upload']='$WP_SITE/wp-content/uploads/$(wp post get $LOGO_ID --field=guid)'
-print(json.dumps(opts))")
-wp option update td_theme_options "$NEW_OPTS" --format=json
+```python
+from browser_use import Agent, Browser, ChatBrowserUse, BrowserProfile
+import asyncio
 
-echo "Logo updated. Clear any cache if needed."
-```
+async def update_newspaper_logo(site_url, logo_image_path):
+    profile = BrowserProfile(storage_state_from_browser='chrome')
+    browser = Browser(profile=profile)
 
-### Export All Template Assignments
+    agent = Agent(
+        task=f"""
+        Go to {site_url}/wp-admin.
+        Navigate to the homepage and click 'Edit with tagDiv Composer'.
+        Wait for the tagDiv Composer to fully load.
+        In the header area, click on the existing logo element.
+        The Header Logo settings panel should appear on the left.
+        Under the 'General' tab, click 'Upload' for the Logo Image field.
+        Upload the image file at path: {logo_image_path}
+        If there's a Retina Logo field, also upload the same image at 2x resolution.
+        Make sure 'Show Image' is selected in the dropdown.
+        If there's an SVG tab, check it and clear any SVG logo that might override the image.
+        Click the Save button in the Composer toolbar.
+        Wait for the save confirmation notification.
+        Close the Composer and verify the new logo appears on the site.
+        """,
+        llm=ChatBrowserUse(),
+        browser=browser,
+    )
+    await agent.run()
+    return await agent.get_result()
 
-```bash
-wp post list --post_type=tdb_templates --format=json | python3 -c "
-import json,sys
-templates=json.load(sys.stdin)
-for t in templates:
-    meta={}
-    for m in $(wp post meta list $t['ID'] --format=json): pass
-    print(f'ID:{t[\"ID\"]} | {t[\"post_title\"]:30} | Type:{t.get(\"tdb_template_type\",\"none\")}')
-"
-
-# Better approach: dump as CSV
-wp post list --post_type=tdb_templates --format=csv --fields=ID,post_title,post_status > templates.csv
+asyncio.run(update_newspaper_logo('https://example.com', '/Users/john/Desktop/new-logo.png'))
 ```
 
 ### Change Global Header Style
 
-```bash
-# Get current theme options
-CURRENT=$(wp option get td_theme_options --format=json)
+Navigate to the Theme Panel via the admin menu. Documented at https://forum.tagdiv.com/header-manager/
 
-# Change header style to style 10
-UPDATED=$(echo "$CURRENT" | python3 -c "
-import json,sys
-opts=json.load(sys.stdin)
-opts['tds_header_style']='tds_header_style_10'
-print(json.dumps(opts))")
-
-wp option update td_theme_options "$UPDATED" --format=json
-echo "Header style updated. Flush cache if needed."
+```python
+agent = Agent(
+    task=f"""
+    Go to {site_url}/wp-admin.
+    Hover over 'Newspaper' in the left admin menu, then click 'Theme Panel'.
+    In the Theme Panel, find the 'Header' or 'Header Style' section.
+    Select the desired header style from the available options.
+    Click the 'Save Settings' button at the bottom.
+    Wait for the success confirmation message.
+    Clear any cache if prompted.
+    """,
+    llm=ChatBrowserUse(),
+    browser=browser,
+)
 ```
 
-### Apply Template to a Specific Category
+### Change Theme Colors
 
-```bash
-CATEGORY_ID=5
-TEMPLATE_ID=100
+Documented at https://forum.tagdiv.com/theme-colors-introduction/
 
-# Set category-specific template
-wp option update "td_$(printf '%03d' $CATEGORY_ID)" '{"tdc_category_template":"'$TEMPLATE_ID'"}'
+```python
+agent = Agent(
+    task=f"""
+    Go to {site_url}/wp-admin.
+    Navigate to Newspaper > Theme Panel.
+    Find the 'Theme Colors' section.
+    Locate the color picker for the element you want to change
+    (e.g., 'Accent Color', 'Header Background', 'Text Color').
+    Click the color picker and enter the new hex color value.
+    Click Save Settings.
+    Wait for confirmation.
+    """,
+    llm=ChatBrowserUse(),
+    browser=browser,
+)
 ```
 
-### Optimize Newspaper Performance
+### Change Fonts
 
-```bash
-# Enable lazy loading if not already on
-CURRENT=$(wp option get td_theme_options --format=json)
-UPDATED=$(echo "$CURRENT" | python3 -c "
-import json,sys
-opts=json.load(sys.stdin)
-opts['tds_lazy_loading_images']='yes'
-opts['tds_minify_css']='yes'
-opts['tds_minify_js']='yes'
-print(json.dumps(opts))")
-wp option update td_theme_options "$UPDATED" --format=json
+Documented at https://forum.tagdiv.com/font-customization/
 
-# Clear theme cache
-wp option delete td_css_cache
-wp option delete td_js_cache
-
-# Regenerate critical CSS
-wp eval "do_action('td_css_demo_gen_callback');"
-
-echo "Performance settings updated and caches cleared."
+```python
+agent = Agent(
+    task=f"""
+    Go to {site_url}/wp-admin.
+    Navigate to Newspaper > Theme Panel > Theme Fonts.
+    Select the desired font family and weights for each text element
+    (Body text, Headings, Menu, etc.).
+    Click Save Settings and wait for confirmation.
+    """,
+    llm=ChatBrowserUse(),
+    browser=browser,
+)
 ```
 
-### Bulk Update Post Templates
+### Import a Pre-Built Website
+
+```python
+agent = Agent(
+    task=f"""
+    Go to {site_url}/wp-admin.
+    Navigate to Newspaper > Theme Panel.
+    Find the 'Pre-built Websites' or 'Demos' section.
+    Browse or search for the demo you want to install.
+    Click 'Install' or 'Import' on the selected pre-built website.
+    Wait for the installation to complete (this may take several minutes).
+    Confirm the installation was successful.
+    WARNING: Installing a pre-built website will overwrite existing theme settings.
+    """,
+    llm=ChatBrowserUse(),
+    browser=browser,
+)
+```
+
+### Export/Import Theme Settings
+
+Documented at https://forum.tagdiv.com/import-export-theme-settings/
+
+```python
+agent = Agent(
+    task=f"""
+    Go to {site_url}/wp-admin.
+    Navigate to Newspaper > Theme Panel > Import/Export.
+    To export: click inside the 'Export Theme Settings' box, select all (Ctrl+A),
+    then copy (Ctrl+C). Save the copied text to a file.
+    To import: paste the settings text into the 'Import Theme Settings' box,
+    then click the 'Import Theme Settings' button.
+    Wait for the import confirmation message.
+    """,
+    llm=ChatBrowserUse(),
+    browser=browser,
+)
+```
+
+### Inspect Current Theme Settings (Read-Only)
+
+For diagnostics only — these DON'T modify settings:
 
 ```bash
-# Set all posts in category 5 to use template ID 99
-POST_IDS=$(wp post list --cat=5 --post_type=post --format=ids)
-for PID in $POST_IDS; do
-  wp post meta update "$PID" td_post_theme_settings '{"td_post_template":"99"}'
-  echo "Updated post $PID"
-done
+# Read current theme state (inspection-only, not for modification)
+wp option get td_theme_options --format=json | python3 -m json.tool
+wp option get tdc_version
+wp option get tds_white_menu
+wp option get tds_footer_style
+```
+
+### Manage Cloud Templates (tdb_templates CPT)
+
+Template management via REST API is OK — templates are WordPress custom post types, not theme settings:
+
+```bash
+# List templates
+wp post list --post_type=tdb_templates --format=json
+
+# Get template by type
+wp post list --post_type=tdb_templates --meta_key=tdb_template_type --meta_value=header
+
+# Export template assignments
+wp post list --post_type=tdb_templates --format=csv --fields=ID,post_title,post_status > templates.csv
 ```
 
 ---
 
-## Workflows & Patterns
+## Workflows & Patterns (browser-use)
 
 ### Complete Header/Footer Setup
 
-```bash
-# 1. Import a header template from Cloud Library
-# (Get template from tagDiv Cloud via their API)
-HEADER_CONTENT='{...json block structure...}'
+1. Import header/footer templates from tagDiv Cloud Library via Theme Panel (browser-use)
+2. Set as global defaults in the Theme Panel (browser-use)
+3. Customize via tagDiv Composer (browser-use)
 
-HEADER_ID=$(curl -s -X POST -u "$WP_USER:$WP_APP_PASSWORD" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"title\":\"Main Header\",
-    \"status\":\"publish\",
-    \"type\":\"tdb_templates\",
-    \"meta\":{
-      \"tdb_template_type\":\"header\",
-      \"tdb_template_global\":$(echo "$HEADER_CONTENT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
-    }
-  }" \
-  "$WP_SITE/wp-json/wp/v2/tdb_templates" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
-
-echo "Created header template: $HEADER_ID"
-
-# 2. Import a footer template
-FOOTER_CONTENT='{...json block structure...}'
-
-FOOTER_ID=$(curl -s -X POST -u "$WP_USER:$WP_APP_PASSWORD" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"title\":\"Main Footer\",
-    \"status\":\"publish\",
-    \"type\":\"tdb_templates\",
-    \"meta\":{
-      \"tdb_template_type\":\"footer\",
-      \"tdb_template_global\":$(echo "$FOOTER_CONTENT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
-    }
-  }" \
-  "$WP_SITE/wp-json/wp/v2/tdb_templates" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
-
-echo "Created footer template: $FOOTER_ID"
-
-# 3. Set them as site-wide defaults
-CURRENT=$(wp option get td_theme_options --format=json)
-UPDATED=$(echo "$CURRENT" | python3 -c "
-import json,sys
-opts=json.load(sys.stdin)
-opts['tds_header_template_id']='$HEADER_ID'
-opts['tds_footer_template_id']='$FOOTER_ID'
-print(json.dumps(opts))")
-wp option update td_theme_options "$UPDATED" --format=json
-
-echo "Header and footer assigned site-wide."
+```python
+agent = Agent(
+    task=f"""
+    Go to {site_url}/wp-admin.
+    Navigate to Newspaper > Theme Panel.
+    If you need templates from the Cloud Library:
+      - Go to the 'Cloud Templates' tab
+      - Browse or search for a header template
+      - Click 'Import' on the desired template
+      - Repeat for a footer template if needed
+    To assign them globally:
+      - Go to the 'Templates' or 'Website Manager' section
+      - Set the imported header as the Global Header
+      - Set the imported footer as the Global Footer
+      - Save changes
+    To further customize:
+      - Go to the homepage
+      - Click 'Edit with tagDiv Composer'
+      - Modify elements in the header/footer as needed
+      - Save
+    """,
+    llm=ChatBrowserUse(),
+    browser=browser,
+)
 ```
 
 ### Migrate Newspaper Theme Settings Between Sites
 
-```bash
-# SOURCE: Export theme settings
-wp option get td_theme_options --format=json > td_theme_options.json
-wp post list --post_type=tdb_templates --format=json > tdb_templates.json
-wp post list --post_type=tdc-review --format=json > tdc_reviews.json
+```python
+agent = Agent(
+    task=f"""
+    On the SOURCE site ({source_url}/wp-admin):
+      - Go to Newspaper > Theme Panel > Import/Export
+      - In the 'Export Theme Settings' box, select all text and copy it
+      - Save to a file
 
-# Copy exported files to destination server
-
-# DESTINATION: Import theme settings
-wp option update td_theme_options "$(cat td_theme_options.json)" --format=json
-
-# Import templates
-python3 -c "
-import json
-with open('tdb_templates.json') as f:
-    templates=json.load(f)
-for t in templates:
-    print(f'ID:{t[\"ID\"]} Title:{t[\"post_title\"]}')"
-
-# Then recreate each template via REST API
+    On the DESTINATION site ({dest_url}/wp-admin):
+      - Go to Newspaper > Theme Panel > Import/Export
+      - Paste the settings text into the 'Import Theme Settings' box
+      - Click 'Import Theme Settings'
+      - Wait for confirmation
+      - If using Cloud Library templates, re-import them:
+        - Go to the 'Cloud Templates' or 'Cloud Library' section
+        - Re-import any custom templates from Cloud Library
+      - Verify the site looks correct
+    """,
+    llm=ChatBrowserUse(),
+    browser=browser,
+)
 ```
 
 ### Mobile-Specific Setup
 
-```bash
-CURRENT=$(wp option get td_theme_options --format=json)
+Use the Theme Panel for mobile configuration:
 
-# Configure mobile theme
-UPDATED=$(echo "$CURRENT" | python3 -c "
-import json,sys
-opts=json.load(sys.stdin)
-opts['tds_mobile_theme']='tds_mobile'
-opts['tds_mobile_logo']='$MOBILE_LOGO_URL'
-opts['tds_mobile_menu_style']='tds_mobile_menu_style_1'
-opts['tds_mobile_search']='yes'
-opts['tds_mobile_social_icons']='yes'
-print(json.dumps(opts))")
+```python
+agent = Agent(
+    task=f"""
+    Go to {site_url}/wp-admin.
+    Navigate to Newspaper > Theme Panel.
+    Find the 'Mobile Theme' or 'Responsive' settings section.
+    Configure:
+      - Enable/disable mobile theme if desired
+      - Set mobile-specific logo (upload a smaller version)
+      - Configure mobile menu style
+      - Enable/disable mobile search and social icons
+    Save settings.
+    Verify on a mobile viewport or by resizing the browser.
+    """,
+    llm=ChatBrowserUse(),
+    browser=browser,
+)
+```
 
-wp option update td_theme_options "$UPDATED" --format=json
+### Optimize Newspaper Performance
+
+Use the Theme Panel for performance toggles:
+
+```python
+agent = Agent(
+    task=f"""
+    Go to {site_url}/wp-admin.
+    Navigate to Newspaper > Theme Panel.
+    Find performance-related settings:
+      - Enable lazy loading for images
+      - Enable CSS minification
+      - Enable JS minification
+      - Configure cache settings
+    Save settings.
+    If available, use the 'Clear Cache' or 'Regenerate CSS' option.
+    Also clear any WordPress transients:
+      wp transient delete --all
+    """,
+    llm=ChatBrowserUse(),
+    browser=browser,
+)
 ```
 
 ---
 
 ## Troubleshooting
 
-- **"Template not applying"**: Check that the template `post_status` is `publish` and the `tdb_template_type` meta is set correctly. Also verify the template is assigned in `td_theme_options` under the correct key.
-- **"Composer not loading"**: This often means the nonce is expired or user is not logged in. The tagDiv Composer requires admin-level authentication. Use cookie-based auth for admin AJAX if using the Composer programmatically.
-- **"Cloud Library connection failed"**: Verify the API key in `td_theme_options` → `tds_cloud_api_key`. The tagDiv Cloud API key must be valid and the subscription active.
-- **Performance issues after import**: Run `wp transient delete --all` and clear the theme CSS cache (`wp option delete td_css_cache`). Regenerate critical CSS via the Theme Panel.
-- **"White screen after updating theme options"**: If manually editing `td_theme_options`, ensure the JSON is valid. An invalid serialized array will break the theme panel. Always validate with `wp option get td_theme_options --format=json | python3 -m json.tool` before saving.
+- **"Template not applying"**: Check that the template `post_status` is `publish` and the `tdb_template_type` meta is set correctly. Assign it properly via the Theme Panel UI (browser-use). Avoid modifying `td_theme_options` directly.
+- **"Composer not loading"**: This often means the nonce is expired or user is not logged in. The tagDiv Composer requires admin-level authentication. Use `BrowserProfile(storage_state_from_browser='chrome')` to reuse an already-logged-in session.
+- **"Cloud Library connection failed"**: Verify the API key in Theme Panel → Cloud Templates. The API key is stored in `td_theme_options` → `tds_cloud_api_key` (read-only via `wp option get`).
+- **"Logo not appearing after change"**: Check if an SVG logo is overriding the image — in the Header Logo settings, check the SVG tab and clear it if needed. Use browser-use to navigate the Composer and inspect the logo element settings.
+- **Performance issues after import**: Clear all caches via Theme Panel, then run `wp transient delete --all`.
+- **"White screen after updating theme options"**: This almost always happens when `td_theme_options` was edited directly via WP-CLI. Restore from a Theme Panel backup: go to Theme Panel > Import/Export and restore a previous version. Never hand-edit `td_theme_options`.
