@@ -1,4 +1,9 @@
-# Skill: wp-admin-content
+---
+name: wp-admin-content
+description: Manage WordPress sites via REST API and WP-CLI — administer users, plugins, themes, content, security, and extendable plugin ecosystems including WooCommerce, LifterLMS, and Newspaper theme.
+license: MIT
+compatibility: opencode
+---
 
 ## What I do
 - Manage WordPress sites via REST API and WP-CLI
