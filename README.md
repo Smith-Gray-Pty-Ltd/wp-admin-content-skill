@@ -13,6 +13,7 @@ An agent skill for AI coding agents (openclaw, Hermes, LangGraph, etc.) that tea
 - **News/Media Themes** — Newspaper theme (tagDiv) template management
 - **Migrations** — Site migrations, database search-replace, staging ↔ production sync
 - **Automation** — Bulk operations, scheduled tasks, content imports
+- **Browser Automation** — Playwright-powered admin UI interaction for page builders, setup wizards, and drag-and-drop editors
 
 ## Architecture
 
@@ -27,7 +28,8 @@ wp-admin-content-skill/
 ├── guides/                      # Detailed workflow guides
 │   ├── security-hardening.md    # Full security hardening checklist
 │   ├── content-workflows.md     # Content management patterns
-│   └── site-migration.md        # Site migration guide
+│   ├── site-migration.md        # Site migration guide
+│   └── browser-automation.md    # Playwright wp-admin UI automation
 ├── scripts/                     # Helper scripts
 │   ├── wp-audit.sh              # Security audit with auto-fix
 │   └── wp-backup.sh             # Automated backup with remote upload
@@ -74,6 +76,12 @@ The skill requires the user to provide:
 - **SSH access** to the server (for WP-CLI operations — optional but recommended)
 
 The agent will prompt for these when needed. No credentials are stored in this repo.
+
+For **browser automation** (Playwright), the user also needs **Node.js** installed:
+```bash
+npm install playwright
+npx playwright install chromium
+```
 
 ## Adding New Plugin Support
 

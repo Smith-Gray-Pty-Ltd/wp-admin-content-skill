@@ -12,6 +12,7 @@ compatibility: opencode
 - Install, activate, update, and configure plugins and themes
 - Audit and harden WordPress security
 - Manage extendable plugin ecosystems: WooCommerce, LifterLMS, Newspaper theme, and more
+- Interact with the WordPress admin UI via Playwright for visual builders, settings wizards, and drag-and-drop editors
 - Perform site migrations, backups, and health monitoring
 - Automate repetitive WordPress administration tasks
 
@@ -72,6 +73,30 @@ WP-CLI should be used for bulk operations, database work, and anything the REST 
 | Search-replace URLs during migration | WP-CLI only |
 | Cron management | WP-CLI only |
 | Content export/import | WP-CLI or REST API |
+| Visual builders (tagDiv Composer, Elementor) | Playwright |
+| Plugin settings wizards (WooCommerce setup, LifterLMS) | Playwright |
+| Admin UI workflows that lack REST endpoints | Playwright |
+
+---
+
+## Browser Automation via Playwright
+
+For tasks that require interacting with the WordPress admin UI — visual page builders, settings wizards, drag-and-drop editors, or any admin screen that lacks a REST API — use Playwright.
+
+```bash
+# Install Playwright
+npm install playwright
+npx playwright install chromium
+```
+
+The agent should use Playwright to:
+1. **Log in** to wp-admin via the login form
+2. **Navigate** to the relevant admin page
+3. **Interact** with form fields, buttons, and UI elements
+4. **Wait** for AJAX requests to complete (WordPress admin is heavy on XHR)
+5. **Verify** the result
+
+See `guides/browser-automation.md` for the full Playwright patterns, selectors, and workflows.
 
 ---
 
@@ -736,6 +761,12 @@ wp cache flush
 ```
 
 See `guides/security-hardening.md` for the full hardening guide.
+
+---
+
+## Browser Automation (Playwright)
+
+For tasks that require the WordPress admin UI (tagDiv Composer, Customizer, settings wizards), use Playwright to automate the browser. See `guides/browser-automation.md` for the full guide with login patterns, selectors, navigation, and workflow examples.
 
 ---
 
