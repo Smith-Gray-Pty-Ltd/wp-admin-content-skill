@@ -13,7 +13,7 @@ An agent skill for AI coding agents (openclaw, Hermes, LangGraph, etc.) that tea
 - **News/Media Themes** — Newspaper theme (tagDiv) template management
 - **Migrations** — Site migrations, database search-replace, staging ↔ production sync
 - **Automation** — Bulk operations, scheduled tasks, content imports
-- **Browser Automation** — Playwright-powered admin UI interaction for page builders, setup wizards, and drag-and-drop editors
+- **Browser Automation** — browser-use-powered admin UI interaction for page builders, setup wizards, and drag-and-drop editors
 
 ## Architecture
 
@@ -77,11 +77,14 @@ The skill requires the user to provide:
 
 The agent will prompt for these when needed. No credentials are stored in this repo.
 
-For **browser automation** (Playwright), the user also needs **Node.js** installed:
+For **browser automation** (browser-use), the user also needs **Python >= 3.11**:
 ```bash
-npm install playwright
-npx playwright install chromium
+pip install browser-use
+python -m playwright install chromium
 ```
+The agent will prompt for these if a task requires UI automation. browser-use describes tasks in natural language — far more reliable than raw Playwright selectors for WordPress's dynamic admin UI.
+
+If Python is unavailable, a Playwright (Node.js) fallback is documented in `guides/browser-automation.md`.
 
 ## Adding New Plugin Support
 

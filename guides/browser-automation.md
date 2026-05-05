@@ -1,708 +1,532 @@
-# WordPress Admin UI Automation via Playwright
+# WordPress Admin UI Automation via browser-use
 
 ## Why Browser Automation
 
 Some WordPress tasks cannot be done via the REST API or WP-CLI:
 
-- **tagDiv Composer** (Newspaper theme) — the drag-and-drop page builder is entirely JavaScript-driven and saves via AJAX
+- **tagDiv Composer** (Newspaper theme) — the drag-and-drop page builder is entirely JavaScript-driven
 - **Customizer** — live preview, widget placement, menu editing
-- **Plugin setup wizards** — WooCommerce onboarding, LifterLMS setup, most multi-step wizards
-- **Settings pages with dynamic JS** — many plugins render settings with React/Vue and save via admin-ajax.php
-- **Admin screens with no REST endpoint** — any screen you'd normally click through
+- **Plugin setup wizards** — WooCommerce onboarding, LifterLMS setup, multi-step wizards
+- **Settings pages with dynamic JS** — many plugins render settings with React/Vue
+- **Any admin screen you'd normally click through** — no REST endpoint, no WP-CLI command
 
-Playwright is the recommended tool. It's faster than Puppeteer, has better auto-waiting, and handles iframes (WordPress uses them heavily in the post editor and customizer).
+## Recommended: browser-use (AI-Driven)
 
----
+**[browser-use](https://github.com/browser-use/browser-use)** is purpose-built for AI agents. Instead of hardcoded CSS selectors that break when a plugin updates its UI, you describe the task in natural language and browser-use handles it — including login, navigation, form filling, AJAX waits, and error recovery.
 
-## Setup
+It uses Playwright under the hood, but the AI-driven layer makes it dramatically more resilient to WordPress's notoriously flaky admin UI.
+
+### Installation
 
 ```bash
-# Install Playwright
-npm install playwright
+# Python >= 3.11 required
+pip install browser-use
 
-# Install a browser (chromium is sufficient for wp-admin)
-npx playwright install chromium
-
-# For CI or headless servers
-npx playwright install-deps chromium
+# Install Chromium (one-time)
+playwright install chromium
+# or if playwright isn't on PATH:
+# python -m playwright install chromium
 ```
 
-**When the agent needs Playwright**: the agent should check if Playwright is available, and if not, guide the user to install it with the commands above. Playwright scripts can be written inline by the agent and executed via `node`.
+### Quickstart
+
+```python
+from browser_use import Agent, Browser, ChatBrowserUse
+import asyncio
+
+async def main():
+    browser = Browser()
+
+    agent = Agent(
+        task="Go to https://example.com/wp-login.php, "
+             "log in with username 'admin' and password 'your-password', "
+             "then go to Settings > General and change the site title to 'My New Blog'.",
+        llm=ChatBrowserUse(),
+        browser=browser,
+    )
+
+    await agent.run()
+
+    # Get the result
+    result = await agent.get_result()
+    print(result)
+
+asyncio.run(main())
+```
+
+### LLM Providers
+
+browser-use supports multiple LLM backends. `ChatBrowserUse()` is optimized for browser tasks, but you can also use:
+
+```python
+from browser_use import ChatOpenAI, ChatAnthropic, ChatGoogle
+
+llm=ChatOpenAI(model='gpt-4o')
+# llm=ChatAnthropic(model='claude-sonnet-4-6')
+# llm=ChatGoogle(model='gemini-3-flash-preview')
+```
+
+For local models: `ChatOllama(model='qwen3')`
+
+### Using Real Browser Profiles (Stay Logged In)
+
+The most reliable approach for WordPress: reuse your existing Chrome profile so the agent is already logged in. This avoids re-authentication and 2FA issues.
+
+```python
+from browser_use import Browser, BrowserProfile, Agent, ChatBrowserUse
+import asyncio
+
+async def main():
+    # Use your existing Chrome profile (already logged into wp-admin)
+    profile = BrowserProfile(
+        storage_state_from_browser='chrome',  # Uses ~/Library/Application Support/Google/Chrome
+        # Or specify a path:
+        # storage_state='./wp-auth-state.json',
+        headless=False,  # Set True once you've confirmed it works
+    )
+
+    browser = Browser(profile=profile)
+
+    agent = Agent(
+        task="In wp-admin, go to WooCommerce > Settings > Payments, "
+             "enable Stripe and set it to test mode.",
+        llm=ChatBrowserUse(),
+        browser=browser,
+    )
+
+    await agent.run()
+
+asyncio.run(main())
+```
+
+**Alternative: save auth state for reuse**
+
+```python
+# First run: log in and save state
+profile = BrowserProfile(
+    storage_state='./wp-auth-state.json',
+)
+agent = Agent(
+    task="Go to https://example.com/wp-login.php, log in with username 'admin' "
+         "and password 'your-password', then close.",
+    llm=ChatBrowserUse(),
+    browser=Browser(profile=profile),
+)
+await agent.run()
+# The auth state is saved to wp-auth-state.json
+
+# Subsequent runs: reuse the saved auth
+profile = BrowserProfile(
+    storage_state='./wp-auth-state.json',
+)
+agent = Agent(
+    task="Go to wp-admin, navigate to Posts > All Posts, "
+         "and publish the draft titled 'My Draft Post'",
+    llm=ChatBrowserUse(),
+    browser=Browser(profile=profile),
+)
+await agent.run()
+```
+
+### Cloud Browser (No Local Chrome Needed)
+
+For production or when you don't want to run a local browser:
+
+```python
+from browser_use import Agent, Browser, ChatBrowserUse
+import asyncio
+
+async def main():
+    browser = Browser(use_cloud=True)  # Requires BROWSER_USE_API_KEY env var
+
+    agent = Agent(
+        task="Go to https://example.com/wp-admin, log in as admin, "
+             "navigate to Users > Add New, create a user 'editor1' with role Editor.",
+        llm=ChatBrowserUse(),
+        browser=browser,
+    )
+
+    await agent.run()
+
+asyncio.run(main())
+```
+
+Get an API key at [cloud.browser-use.com](https://cloud.browser-use.com/settings?tab=api-keys&new=1). Cloud browsers provide stealth detection avoidance, CAPTCHA solving, and proxy rotation.
 
 ---
 
-## Login & Session Management
+## WordPress-Specific Workflow Recipes
 
-### Pattern 1: Login via wp-login.php (fresh session)
+### Recipe 1: Log In and Change a Setting
+
+```python
+from browser_use import Agent, Browser, ChatBrowserUse, BrowserProfile
+import asyncio
+
+async def change_setting(site_url, username, password, setting_page, setting_name, new_value):
+    browser = Browser()
+
+    agent = Agent(
+        task=f"""
+        Go to {site_url}/wp-login.php.
+        Log in with username '{username}' and password '{password}'.
+        If WordPress shows a 2FA prompt, ask for help (you cannot complete 2FA).
+        Once you see the admin dashboard, navigate to {setting_page}.
+        Find the setting labeled '{setting_name}' and change it to '{new_value}'.
+        Click Save Changes.
+        Verify the setting was saved by checking for a success notice.
+        """,
+        llm=ChatBrowserUse(),
+        browser=browser,
+    )
+
+    await agent.run()
+    return await agent.get_result()
+
+# Usage
+asyncio.run(change_setting(
+    'https://example.com',
+    'admin',
+    'your-password',
+    'Settings > General',
+    'Site Title',
+    'My Awesome Blog'
+))
+```
+
+### Recipe 2: Create a Post in Gutenberg
+
+```python
+async def create_gutenberg_post(site_url, username, password, title, content, category=None):
+    browser = Browser()
+
+    task = f"""
+    Go to {site_url}/wp-login.php and log in as '{username}' with password '{password}'.
+    Navigate to Posts > Add New.
+    Wait for the Gutenberg editor to fully load (you should see 'Add title' placeholder).
+    Click the title area and type: {title}
+    Click in the main content area (below the title) and type: {content}
+    """
+    if category:
+        task += f"\nIn the right sidebar, find the Categories panel. Check the box for '{category}'."
+    task += """
+    Click the Publish button (blue button, top right).
+    In the pre-publish panel that appears, click the second Publish button to confirm.
+    Wait for the post-publish confirmation to appear.
+    Report the URL of the published post.
+    """
+
+    agent = Agent(task=task, llm=ChatBrowserUse(), browser=browser)
+    await agent.run()
+    return await agent.get_result()
+```
+
+### Recipe 3: tagDiv Composer — Edit a Post with the Page Builder
+
+This is exactly where browser-use shines — the Composer is pure JavaScript with no REST API.
+
+```python
+async function composer_edit_post(site_url, username, password, post_id, instructions):
+    browser = Browser()
+
+    agent = Agent(
+        task=f"""
+        Go to {site_url}/wp-login.php and log in as '{username}' with password '{password}'.
+        Navigate to the post editor for post ID {post_id}: {site_url}/wp-admin/post.php?post={post_id}&action=edit.
+        Click the 'tagDiv Composer' button to open the page builder.
+        Wait for the Composer interface to fully load (you should see the drag-and-drop canvas).
+        {instructions}
+        Click the Save button in the Composer.
+        Wait for the save confirmation notification.
+        Close the Composer and confirm the changes are reflected.
+        """,
+        llm=ChatBrowserUse(),
+        browser=browser,
+    )
+
+    await agent.run()
+    return await agent.get_result()
+
+# Usage
+asyncio.run(composer_edit_post(
+    'https://example.com', 'admin', 'your-password', 123,
+    "Add a new text block at the top of the page with the heading 'Breaking News'. "
+    "Add a new image block below it and insert the image with URL https://example.com/news.jpg."
+))
+```
+
+### Recipe 4: WooCommerce Onboarding Wizard
+
+```python
+async function run_woocommerce_wizard(site_url, username, password, store_config):
+    browser = Browser()
+
+    agent = Agent(
+        task=f"""
+        Go to {site_url}/wp-login.php and log in as '{username}' with password '{password}'.
+        Navigate to WooCommerce > Settings > Help > Setup Wizard.
+        If the wizard has already been completed, look for a 'Run Setup Wizard Again' option.
+        Step through the wizard:
+        - Store Details: set address to '{store_config.get("address")}', city '{store_config.get("city")}', country '{store_config.get("country")}'
+        - Industry: select '{store_config.get("industry", "Other")}'
+        - Product Types: select '{", ".join(store_config.get("product_types", ["Physical products"]))}'
+        - Business Details: fill in the form with the business information provided
+        Continue through all steps until the wizard is complete.
+        Confirm you see a success/completion screen.
+        """,
+        llm=ChatBrowserUse(),
+        browser=browser,
+    )
+
+    await agent.run()
+    return await agent.get_result()
+```
+
+### Recipe 5: Customizer — Change Site Identity
+
+```python
+async function update_customizer(site_url, username, password, changes):
+    browser = Browser()
+
+    descriptions = "\n".join(f"- {k}: {v}" for k, v in changes.items())
+    agent = Agent(
+        task=f"""
+        Go to {site_url}/wp-login.php and log in as '{username}' with password '{password}'.
+        Navigate to Appearance > Customize.
+        Wait for the Customizer to fully load (left panel + preview iframe).
+        Make the following changes in the Customizer:
+        {descriptions}
+        Click the Publish button at the top of the Customizer panel.
+        Wait for the save confirmation.
+        Close the Customizer.
+        """,
+        llm=ChatBrowserUse(),
+        browser=browser,
+    )
+
+    await agent.run()
+    return await agent.get_result()
+
+# Usage
+asyncio.run(update_customizer(
+    'https://example.com', 'admin', 'your-password',
+    {
+        'Site Title': 'My New Site',
+        'Tagline': 'Just another awesome blog',
+    }
+))
+```
+
+### Recipe 6: Bulk Assign Categories to Posts
+
+```python
+async def bulk_categorize(site_url, username, password, category_name, post_ids):
+    browser = Browser()
+
+    ids_str = ', '.join(str(pid) for pid in post_ids)
+    agent = Agent(
+        task=f"""
+        Go to {site_url}/wp-login.php and log in as '{username}' with password '{password}'.
+        Navigate to Posts > All Posts.
+        For each of these post IDs, check the checkbox next to it: {ids_str}
+        Once all are checked, use the Bulk Actions dropdown at the top, select 'Edit'.
+        Click Apply.
+        In the bulk edit panel that appears, find the Categories section.
+        Check the box for '{category_name}'.
+        Click Update.
+        Wait for the success notice confirming the posts were updated.
+        """,
+        llm=ChatBrowserUse(),
+        browser=browser,
+    )
+
+    await agent.run()
+    return await agent.get_result()
+```
+
+---
+
+## Using Custom Tools with browser-use
+
+For WordPress-specific operations that need precise DOM interaction, register custom tools:
+
+```python
+from browser_use import Tools, Agent, Browser, ChatBrowserUse
+import asyncio
+
+tools = Tools()
+
+@tools.action(description='Get the current WordPress nonce from the page for AJAX requests.')
+def get_wp_nonce() -> str:
+    """Returns JavaScript to extract a nonce from the page."""
+    return """
+    const nonceInput = document.querySelector('#_wpnonce, input[name="_wpnonce"]');
+    if (nonceInput) return nonceInput.value;
+    // Check for wpApiSettings (Gutenberg)
+    if (window.wpApiSettings && window.wpApiSettings.nonce) return window.wpApiSettings.nonce;
+    return null;
+    """
+
+@tools.action(description='Check for WordPress admin notices (success, error, warning).')
+def check_admin_notices() -> str:
+    """Returns JavaScript to extract visible admin notices."""
+    return """
+    const notices = document.querySelectorAll('.notice, .updated, .error');
+    return Array.from(notices).map(n => ({
+        type: n.classList.contains('notice-success') || n.classList.contains('updated') ? 'success'
+            : n.classList.contains('notice-error') || n.classList.contains('error') ? 'error'
+            : 'info',
+        text: n.textContent.trim().substring(0, 200)
+    }));
+    """
+
+async def main():
+    browser = Browser()
+    agent = Agent(
+        task="Log into wp-admin and check for any pending updates.",
+        llm=ChatBrowserUse(),
+        browser=browser,
+        tools=tools,
+    )
+    await agent.run()
+
+asyncio.run(main())
+```
+
+---
+
+## CLI Mode
+
+browser-use also has a CLI for quick one-off operations:
+
+```bash
+pip install browser-use
+browser-use open https://example.com/wp-login.php
+browser-use state          # See clickable elements
+browser-use click 5        # Click element by index
+browser-use type "admin"   # Type text
+browser-use screenshot wp-dashboard.png
+browser-use close
+```
+
+---
+
+## When browser-use Is Not Available (Playwright Fallback)
+
+If the user cannot install browser-use (no Python, or restricted environment), fall back to raw Playwright in Node.js.
+
+See the table at the end of this guide for browser-use vs Playwright tradeoffs. For raw Playwright patterns (login, selectors, AJAX handling, Gutenberg, Customizer, tagDiv Composer), refer to the patterns below in the **Playwright Fallback Reference** section.
+
+---
+
+## Troubleshooting
+
+| Issue | Likely Cause | Fix |
+|-------|-------------|-----|
+| Agent gets stuck on login | WordPress redirects or 2FA | Use `BrowserProfile(storage_state_from_browser='chrome')` to reuse an already-logged-in session |
+| Agent can't find an element | Dynamic UI loaded after page | Add "Wait for the page to fully load" to the task description |
+| tagDiv Composer doesn't open | The button label changed | Use a profile with an already-logged-in session; describe the button by color ("orange tagDiv Composer button") |
+| Gutenberg blocks not appearing | Editor still initializing | Add "Wait for the Gutenberg editor to fully load (you should see the block toolbar)" |
+| Customizer iframe broken | Cross-origin restrictions | Cloud browsers handle this; for local, use `headless=False` |
+| Cloud connection fails | API key not set | `export BROWSER_USE_API_KEY=your_key` |
+| Rate limited by WordPress | Too many rapid actions | Add pauses: "Wait 2 seconds between each action" in task description |
+| "Are you sure you want to do this?" | Nonce expired | Tell the agent: "If you see a confirmation dialog, go back to the previous page and try again" |
+
+---
+
+## Decision: browser-use vs Playwright vs REST API vs WP-CLI
+
+| Task | Best Tool | Why |
+|------|-----------|-----|
+| Create posts (text content) | REST API | Fast, reliable, no browser overhead |
+| Install/update plugins | WP-CLI | Single command, no UI |
+| Bulk database operations | WP-CLI | Only tool that can do this |
+| Upload media | REST API | Simple multipart upload |
+| Change site settings | REST API or WP-CLI | Structured, atomic |
+| **tagDiv Composer editing** | **browser-use** | No API exists, pure JS UI |
+| **Plugin setup wizards** | **browser-use** | Multi-step JavaScript wizards |
+| **Customizer changes** | **browser-use** | Iframe-based live preview, no REST endpoint for all controls |
+| **Gutenberg with complex blocks** | **browser-use** | Drag-and-drop block placement, column layouts, reusable blocks |
+| **WooCommerce onboarding** | **browser-use** | Wizard with conditional steps |
+| **Bulk category assignment** | **browser-use or WP-CLI** | WP-CLI is faster, browser-use is simpler for non-technical users |
+| **Menu management** | **browser-use** | Drag-and-drop interface, no practical REST API for all operations |
+| **Widget placement** | **browser-use** | Drag-and-drop widget areas |
+
+### When to Fall Back to Raw Playwright
+
+Use raw Playwright only when:
+- Python is not available and you need Node.js
+- You need precise control over a single DOM operation that browser-use over-engineers
+- You're in a CI pipeline that already has Playwright set up
+- The task is so simple (click one button, verify one element) that browser-use is overkill
+
+---
+
+## Playwright Fallback Reference
+
+If browser-use is unavailable, these raw Playwright (Node.js) patterns provide the minimum needed for wp-admin automation. **These are less reliable than browser-use** — selectors may break when plugins update.
+
+### Setup
+
+```bash
+npm install playwright
+npx playwright install chromium
+```
+
+### Login
 
 ```javascript
 const { chromium } = require('playwright');
 
 async function wpLogin(siteUrl, username, password) {
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext();
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  });
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    ignoreHTTPSErrors: true,
+  });
   const page = await context.newPage();
 
-  // Navigate to login page
   await page.goto(`${siteUrl}/wp-login.php`);
-
-  // Fill credentials
   await page.fill('#user_login', username);
   await page.fill('#user_pass', password);
 
-  // Submit and wait for redirect to wp-admin
   await Promise.all([
     page.waitForNavigation({ waitUntil: 'networkidle' }),
     page.click('#wp-submit')
   ]);
 
-  // Verify we're logged in
   const adminBar = await page.$('#wpadminbar');
-  if (!adminBar) {
-    throw new Error('Login failed — no admin bar found');
-  }
-
-  return { browser, context, page };
-}
-
-// Usage
-const { browser, page } = await wpLogin('https://example.com', 'admin', 'app-password');
-```
-
-### Pattern 2: Login via Application Password (stateless)
-
-WordPress Application Passwords work with Basic Auth for REST API but NOT for wp-admin cookie auth. For wp-admin, you must log in through the login form.
-
-If you need both REST API and wp-admin access in the same script, log in via the form first, then use the cookies for subsequent REST calls:
-
-```javascript
-async function wpLoginAndGetCookies(siteUrl, username, password) {
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext();
-  const page = await context.newPage();
-
-  await page.goto(`${siteUrl}/wp-login.php`);
-  await page.fill('#user_login', username);
-  await page.fill('#user_pass', password);
-  await Promise.all([
-    page.waitForNavigation({ waitUntil: 'networkidle' }),
-    page.click('#wp-submit')
-  ]);
-
-  // Extract cookies for REST API use
-  const cookies = await context.cookies();
-  const cookieHeader = cookies
-    .map(c => `${c.name}=${c.value}`)
-    .join('; ');
-
-  await browser.close();
-
-  return cookieHeader;
-}
-
-// Use cookies with curl
-const cookieHeader = await wpLoginAndGetCookies('https://example.com', 'admin', 'mypass');
-// curl -H "Cookie: $cookieHeader" https://example.com/wp-json/wp/v2/posts
-```
-
-### Pattern 3: Reuse Session (avoid login each time)
-
-For repeated automation, save and reuse the browser state:
-
-```javascript
-const path = require('path');
-const fs = require('fs');
-
-const STATE_FILE = path.join(__dirname, 'wp-auth-state.json');
-
-async function getAuthenticatedPage(siteUrl, username, password) {
-  const browser = await chromium.launch({ headless: true });
-
-  let context;
-  if (fs.existsSync(STATE_FILE)) {
-    // Reuse existing session
-    context = await browser.newContext({
-      storageState: STATE_FILE
-    });
-    const page = await context.newPage();
-    await page.goto(`${siteUrl}/wp-admin`);
-
-    // Check if session still valid
-    const adminBar = await page.$('#wpadminbar');
-    if (adminBar) {
-      return { browser, context, page };
-    }
-    // Session expired — delete state and re-login
-    fs.unlinkSync(STATE_FILE);
-    await context.close();
-  }
-
-  // Fresh login
-  context = await browser.newContext();
-  const page = await context.newPage();
-
-  await page.goto(`${siteUrl}/wp-login.php`);
-  await page.fill('#user_login', username);
-  await page.fill('#user_pass', password);
-  await Promise.all([
-    page.waitForNavigation({ waitUntil: 'networkidle' }),
-    page.click('#wp-submit')
-  ]);
-
-  // Save state for next run
-  await context.storageState({ path: STATE_FILE });
-
+  if (!adminBar) throw new Error('Login failed');
   return { browser, context, page };
 }
 ```
 
-### Pattern 4: Bypass Login via WP-CLI Auth Cookie
-
-For maximum reliability, generate a valid auth cookie via WP-CLI and inject it into Playwright:
-
-```bash
-# Generate an auth cookie valid for 48 hours
-AUTH_COOKIE=$(wp eval "
-  \$user = get_user_by('login', 'admin');
-  wp_set_auth_cookie(\$user->ID, true);
-  " --skip-plugins=two-factor 2>/dev/null)
-# The cookie name is based on the site URL hash
-```
-
-Then in Playwright:
+### AJAX Wait Helper
 
 ```javascript
-async function loginWithWpCliCookie(siteUrl, browserContext) {
-  // WP-CLI generates cookies that Playwright can use directly
-  // The user runs this command and passes the cookie value
-  const cookieValue = process.env.WP_AUTH_COOKIE;
-  const siteHash = crypto.createHash('md5').update(siteUrl).digest('hex');
-
-  await browserContext.addCookies([{
-    name: `wordpress_logged_in_${siteHash}`,
-    value: cookieValue,
-    domain: new URL(siteUrl).hostname,
-    path: '/',
-    httpOnly: true,
-    secure: siteUrl.startsWith('https'),
-    sameSite: 'Lax'
-  }]);
+async function waitForAjax(page, timeoutMs = 10000) {
+  await page.waitForFunction(
+    () => typeof jQuery !== 'undefined' && jQuery.active <= 1,
+    { timeout: timeoutMs }
+  );
 }
 ```
 
----
-
-## WordPress Admin Navigation & Selectors
-
-### Common CSS Selectors
-
-WordPress admin is built on jQuery UI and has stable class names:
+### Common Selectors
 
 | Element | Selector |
 |---------|----------|
-| Admin menu item | `#adminmenu .menu-top a[href*="page=menu-slug"]` |
-| Left sidebar submenu | `#adminmenu .wp-submenu a[href*="sub-page"]` |
-| Post list table | `#the-list tr` or `.wp-list-table tr` |
-| Bulk action dropdown | `#bulk-action-selector-top` |
-| "Apply" button | `#doaction` |
-| "Add New" button (top) | `.page-title-action` |
-| Save/Publish button | `#publish`, `#save-post`, `input[name="save"]` |
+| Admin menu item | `#adminmenu a:has-text("Menu Name")` |
 | Settings form | `form[action="options.php"]` |
-| Tab navigation | `.nav-tab-wrapper .nav-tab` |
-| Metaboxes | `.postbox` or `.meta-box-sortables` |
-| Admin notice | `.notice` or `.updated` or `.error` |
-| WP Editor (Classic) | `#wp-content-wrap` (textarea mode: `#content`, TinyMCE: `#tinymce`) |
-| Media library button | `#insert-media-button` or `.insert-media` |
-| Media modal | `#__wp-uploader-id-0` or `.media-modal` |
-
-### Navigation Helpers
-
-```javascript
-// Navigate to any admin page
-async function goToAdminPage(page, siteUrl, pagePath) {
-  await page.goto(`${siteUrl}/wp-admin/${pagePath}`, {
-    waitUntil: 'networkidle'
-  });
-  // WordPress admin pages often load via AJAX — wait for the main content
-  await page.waitForSelector('#wpbody-content', { state: 'visible' });
-}
-
-// Click an admin menu item
-async function clickAdminMenu(page, menuText) {
-  // Menu items are links in #adminmenu
-  await page.click(`#adminmenu a:has-text("${menuText}")`);
-  await page.waitForLoadState('networkidle');
-}
-
-// Fill a wp-admin form field (handles both plain inputs and TinyMCE)
-async function fillWpField(page, fieldId, value) {
-  // Check if it's a textarea (post content)
-  const isTextarea = await page.$(`#${fieldId}`);
-  if (isTextarea) {
-    // Classic editor textarea
-    await page.fill(`#${fieldId}`, value);
-  } else {
-    // Regular input
-    await page.fill(`input[name="${fieldId}"]`, value);
-  }
-}
-```
-
----
-
-## Handling WordPress AJAX (Critical)
-
-WordPress admin makes heavy use of `admin-ajax.php`. Many operations trigger background XHR requests that must complete before the next action.
-
-### Wait for AJAX to Complete
-
-```javascript
-// Generic helper: wait until no active AJAX requests
-async function waitForAjax(page, timeoutMs = 10000) {
-  // jQuery's $.active tracks pending requests
-  await page.waitForFunction(
-    () => typeof jQuery !== 'undefined' && jQuery.active === 0,
-    { timeout: timeoutMs }
-  );
-}
-
-// Wait for a specific admin notice to appear (success or error)
-async function waitForAdminNotice(page, textContains = '') {
-  const selector = textContains
-    ? `.notice:has-text("${textContains}")`
-    : '.notice';
-  await page.waitForSelector(selector, { timeout: 15000 });
-  return await page.textContent(selector);
-}
-
-// Click a button that triggers AJAX, then wait
-async function clickAndWaitForAjax(page, selector) {
-  await Promise.all([
-    waitForAjax(page),
-    page.click(selector)
-  ]);
-}
-
-// Fill a field that triggers autosave/AJAX, then wait
-async function fillAndWaitForAjax(page, selector, value) {
-  await page.fill(selector, value);
-  await waitForAjax(page);
-}
-```
-
-### Handling Heartbeat API
-
-WordPress sends periodic heartbeat requests. These count as active AJAX. Ignore them:
-
-```javascript
-async function waitForAjaxExcludingHeartbeat(page, timeoutMs = 10000) {
-  await page.waitForFunction(
-    () => typeof jQuery !== 'undefined' &&
-      jQuery.active <= 1,  // Allow 1 for heartbeat
-    { timeout: timeoutMs }
-  );
-}
-```
-
-### Handling Nonces
-
-WordPress nonces appear in admin forms as hidden `_wpnonce` fields and in AJAX calls. Playwright handles these automatically since it operates through the browser — the nonce is part of the page's HTML.
-
-If you need to extract a nonce:
-
-```javascript
-async function getWpNonce(page, action = '') {
-  // Common nonce fields
-  const selectors = [
-    `#_wpnonce`,
-    `#_wpnonce_${action}`,
-    `input[name="_wpnonce"]`,
-    `input[name="_wp_http_referer"]`
-  ];
-  for (const sel of selectors) {
-    const el = await page.$(sel);
-    if (el) {
-      return await el.getAttribute('value');
-    }
-  }
-  return null;
-}
-```
-
----
-
-## Common Workflow Patterns
-
-### Workflow 1: Navigate to a Plugin Settings Page and Save
-
-```javascript
-async function updatePluginSettings(page, siteUrl, pluginSlug, settings) {
-  // Navigate to the plugin's settings page
-  await page.goto(`${siteUrl}/wp-admin/admin.php?page=${pluginSlug}`, {
-    waitUntil: 'networkidle'
-  });
-
-  // Fill each setting
-  for (const [key, value] of Object.entries(settings)) {
-    const input = await page.$(`[name="${key}"]`);
-    if (!input) continue;
-
-    const tagName = await input.evaluate(el => el.tagName);
-    const type = await input.evaluate(el => el.type);
-
-    if (tagName === 'SELECT') {
-      await page.selectOption(`[name="${key}"]`, value);
-    } else if (type === 'checkbox') {
-      if (value) await page.check(`[name="${key}"]`);
-      else await page.uncheck(`[name="${key}"]`);
-    } else if (type === 'radio') {
-      await page.check(`[name="${key}"][value="${value}"]`);
-    } else {
-      await page.fill(`[name="${key}"]`, String(value));
-    }
-  }
-
-  // Save
-  await Promise.all([
-    page.waitForNavigation({ waitUntil: 'networkidle' }),
-    page.click('input[type="submit"], button[type="submit"], #submit')
-  ]);
-
-  // Check for success notice
-  const notice = await page.$('.notice-success');
-  return notice !== null;
-}
-```
-
-### Workflow 2: Create a Post in the Gutenberg Editor
-
-```javascript
-async function createGutenbergPost(page, siteUrl, { title, content }) {
-  await page.goto(`${siteUrl}/wp-admin/post-new.php`, {
-    waitUntil: 'networkidle'
-  });
-
-  // Wait for Gutenberg to fully load
-  await page.waitForSelector('.block-editor-writing-flow', { timeout: 15000 });
-
-  // Fill the title (Gutenberg uses a contenteditable h1)
-  const titleBlock = await page.$('h1[aria-label="Add title"]');
-  if (titleBlock) {
-    await titleBlock.click();
-    await page.keyboard.type(title);
-  }
-
-  // Fill content in the default paragraph block
-  const contentBlock = await page.$('.block-editor-rich-text__editable');
-  if (contentBlock) {
-    await contentBlock.click();
-    await page.keyboard.type(content);
-  }
-
-  // Publish
-  await page.click('button.editor-post-publish-button__button');
-  await page.waitForSelector('.editor-post-publish-panel');
-
-  // Confirm publish
-  await page.click('button.editor-post-publish-button');
-  await page.waitForSelector('.post-publish-panel__postpublish-header', {
-    timeout: 20000
-  });
-
-  // Get the published post URL
-  const postUrl = await page.$eval('.post-publish-panel__postpublish-header a', el => el.href);
-  return postUrl;
-}
-```
-
-### Workflow 3: Interact with the Customizer
-
-The Customizer is an iframe-based live preview. Navigate carefully:
-
-```javascript
-async function updateCustomizerSetting(page, siteUrl, settingId, value) {
-  await page.goto(`${siteUrl}/wp-admin/customize.php`, {
-    waitUntil: 'networkidle'
-  });
-
-  // Wait for the customizer to fully load
-  await page.waitForSelector('#customize-controls', { timeout: 20000 });
-
-  // Customizer panels are often collapsed — expand if needed
-  // Settings are in left panel, preview is in iframe
-
-  // Find and expand the relevant section
-  const section = await page.$(`#accordion-section-${settingId}`);
-  if (section) {
-    const isExpanded = await section.evaluate(el =>
-      el.classList.contains('open')
-    );
-    if (!isExpanded) {
-      await section.click();
-      await page.waitForTimeout(500);
-    }
-  }
-
-  // Fill the setting (this varies by control type)
-  const control = await page.$(`[data-customize-setting-link="${settingId}"]`);
-  if (control) {
-    await control.fill(String(value));
-
-    // Trigger change event (customizer listens for this)
-    await control.evaluate(el => {
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-
-    // Wait for the iframe preview to update
-    await page.waitForTimeout(1000);
-  }
-
-  // Save & Publish
-  await page.click('#save');
-  await page.waitForSelector('.saved', { timeout: 15000 });
-
-  return true;
-}
-```
-
-### Workflow 4: tagDiv Composer (Newspaper Theme)
-
-The tagDiv Composer is notoriously difficult to automate. Key patterns:
-
-```javascript
-async function openTagDivComposer(page, siteUrl, postId) {
-  // Navigate to the post edit screen
-  await page.goto(`${siteUrl}/wp-admin/post.php?post=${postId}&action=edit`, {
-    waitUntil: 'networkidle'
-  });
-
-  // Wait for tagDiv Composer button
-  await page.waitForSelector('#td-composer-edit-btn', { timeout: 15000 });
-
-  // Click the tagDiv Composer button
-  await page.click('#td-composer-edit-btn');
-
-  // The composer opens in a full-screen overlay or new iframe
-  // Wait for the composer interface to load
-  await page.waitForSelector('.tdc-header, .tdc-sidebar, .tdc-main-content', {
-    timeout: 30000
-  });
-
-  console.log('tagDiv Composer loaded');
-}
-
-async function saveTagDivComposer(page) {
-  // The save button in tagDiv Composer
-  await page.click('.tdc-save-btn, button[title="Save"]');
-
-  // Wait for save confirmation
-  // tagDiv shows a green notification
-  await page.waitForSelector('.tdc-saved-notification, .tdc-success-msg', {
-    timeout: 15000
-  });
-
-  // Wait for AJAX to finish (the composer saves via admin-ajax.php)
-  await waitForAjax(page, 20000);
-
-  console.log('tagDiv Composer saved');
-}
-
-// Add a block/element in the composer
-async function addTagDivBlock(page, blockType) {
-  // Click the "+" or "Add Element" button
-  await page.click('.tdc-add-element-btn, .tdc-add-block');
-
-  // Wait for the block library to open
-  await page.waitForSelector('.tdc-block-library, .tdc-elements-panel', {
-    timeout: 10000
-  });
-
-  // Click the desired block type
-  await page.click(`.tdc-element[data-block="${blockType}"], .tdc-block-item:has-text("${blockType}")`);
-
-  // Block is added — wait for it to render
-  await page.waitForTimeout(2000);
-}
-```
-
-### Workflow 5: WooCommerce Setup Wizard
-
-```javascript
-async function runWooCommerceSetupWizard(page, siteUrl, config) {
-  await page.goto(`${siteUrl}/wp-admin/admin.php?page=wc-admin&path=%2Fsetup-wizard`, {
-    waitUntil: 'networkidle'
-  });
-
-  // Step 1: Store Details
-  await page.waitForSelector('.woocommerce-profile-wizard__container');
-  await page.fill('#woocommerce-store-address', config.address);
-  await page.fill('#woocommerce-store-city', config.city);
-  await page.selectOption('#woocommerce-store-country', config.country);
-
-  await page.click('.woocommerce-profile-wizard__continue');
-  await page.waitForTimeout(1500);
-
-  // Step 2: Industry
-  if (config.industry) {
-    await page.click(`.woocommerce-profile-wizard__checkbox-group label:has-text("${config.industry}")`);
-    await page.click('.woocommerce-profile-wizard__continue');
-    await page.waitForTimeout(1500);
-  }
-
-  // Step 3: Product Types
-  if (config.productTypes) {
-    for (const type of config.productTypes) {
-      await page.click(`.components-checkbox-control:has-text("${type}")`);
-    }
-    await page.click('.woocommerce-profile-wizard__continue');
-    await page.waitForTimeout(1500);
-  }
-
-  // Step 4: Business Details
-  // Continue through remaining steps
-  // ...
-}
-```
-
-### Workflow 6: Bulk Actions on Post List Table
-
-```javascript
-async function bulkTrashDraftPosts(page, siteUrl) {
-  await page.goto(`${siteUrl}/wp-admin/edit.php?post_status=draft`, {
-    waitUntil: 'networkidle'
-  });
-
-  // Select all drafts
-  await page.check('#cb-select-all-1');
-
-  // Choose "Move to Trash" from bulk actions
-  await page.selectOption('#bulk-action-selector-top', 'trash');
-
-  // Apply
-  await Promise.all([
-    page.waitForNavigation({ waitUntil: 'networkidle' }),
-    page.click('#doaction')
-  ]);
-
-  const notice = await page.textContent('#message');
-  return notice;
-}
-```
-
----
-
-## Playwright Config for WordPress
-
-A reusable config that sets sensible defaults:
-
-```javascript
-// playwright-wp.config.js
-const { chromium } = require('playwright');
-
-module.exports = {
-  async launch(headless = true) {
-    return await chromium.launch({
-      headless,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-web-security',        // wp-admin uses cross-origin iframes
-        '--disable-features=IsolateOrigins,site-per-process'
-      ]
-    });
-  },
-
-  async createContext(browser, siteUrl) {
-    return await browser.newContext({
-      viewport: { width: 1440, height: 900 },
-      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-      ignoreHTTPSErrors: true,
-      // WordPress admin needs these permissions
-      permissions: ['clipboard-read', 'clipboard-write']
-    });
-  }
-};
-```
-
----
-
-## Debugging & Troubleshooting
-
-### Take Screenshots on Failure
-
-```javascript
-async function withScreenshotOnError(page, label, fn) {
-  try {
-    return await fn();
-  } catch (err) {
-    const filename = `/tmp/wp-error-${label}-${Date.now()}.png`;
-    await page.screenshot({ path: filename, fullPage: true });
-    console.error(`Error during "${label}". Screenshot: ${filename}`);
-    throw err;
-  }
-}
-```
-
-### Log All AJAX Requests
-
-```javascript
-page.on('request', req => {
-  if (req.url().includes('admin-ajax.php') || req.url().includes('wp-json')) {
-    console.log(`[AJAX] ${req.method()} ${req.url()}`);
-  }
-});
-
-page.on('response', resp => {
-  if (resp.url().includes('admin-ajax.php')) {
-    console.log(`[AJAX] ${resp.status()} ${resp.url()}`);
-  }
-});
-```
-
-### Detect WordPress Fatal Errors
-
-```javascript
-async function checkForWpError(page) {
-  // WordPress shows fatal errors in #error-page or .wp-die-message
-  const errors = await page.$$eval(
-    '#error-page, .wp-die-message, .php-error, .error:has-text("Fatal"), .notice-error',
-    els => els.map(el => el.textContent.trim())
-  );
-
-  if (errors.length > 0) {
-    throw new Error(`WordPress error detected: ${errors.join(' | ')}`);
-  }
-}
-```
-
-### Common Pitfalls
-
-| Issue | Cause | Fix |
-|-------|-------|-----|
-| `wp_die` or white screen | Nonce expired or invalid request | Re-navigate to the page to get a fresh nonce |
-| Gutenberg not loading | JavaScript error or plugin conflict | Check browser console: `page.on('console', msg => console.log(msg.text()))` |
-| AJAX timeout | WordPress is rate-limiting or overloaded | Increase timeout, add `waitForTimeout()` before clicks |
-| Customizer iframe not accessible | Cross-origin restrictions | Use `--disable-web-security` in args |
-| tagDiv Composer blank | Composer JS hasn't loaded | Wait for `.tdc-header` not just the page load |
-| "Are you sure you want to do this?" | Nonce failure | Always re-navigate the page before form submission |
-| Login redirects to same page | Session cookie issues | Delete old `wp-auth-state.json` and log in fresh |
-
----
-
-## When to Use Playwright vs REST API vs WP-CLI
-
-| Task | Best Tool |
-|------|-----------|
-| Create posts with Gutenberg blocks | REST API (faster, more reliable) |
-| Create posts via page builder (Composer, Elementor) | Playwright |
-| Install/update plugins | WP-CLI |
-| Configure visual page builder settings | Playwright |
-| Bulk database operations | WP-CLI |
-| Upload media | REST API |
-| Run setup wizards (WooCommerce, LifterLMS) | Playwright |
-| Change site settings | REST API or WP-CLI |
-| Drag-and-drop menu editor | Playwright |
-| Widget management | Playwright (via Customizer or Appearance > Widgets) |
-| Customizer live preview changes | Playwright |
-| Export/import content | WP-CLI |
+| Success notice | `.notice-success` |
+| Error notice | `.notice-error` |
+| Save button | `#submit, input[type="submit"]` |
+| Gutenberg title | `h1[aria-label="Add title"]` |
+| Gutenberg content | `.block-editor-rich-text__editable` |
+| Publish button | `button.editor-post-publish-button__button` |
+| Customizer panel | `#customize-controls` |
+| tagDiv Composer btn | `#td-composer-edit-btn` |
+| Media modal | `.media-modal` |

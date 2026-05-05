@@ -12,7 +12,7 @@ compatibility: opencode
 - Install, activate, update, and configure plugins and themes
 - Audit and harden WordPress security
 - Manage extendable plugin ecosystems: WooCommerce, LifterLMS, Newspaper theme, and more
-- Interact with the WordPress admin UI via Playwright for visual builders, settings wizards, and drag-and-drop editors
+- Interact with the WordPress admin UI via browser-use for visual builders, settings wizards, and drag-and-drop editors
 - Perform site migrations, backups, and health monitoring
 - Automate repetitive WordPress administration tasks
 
@@ -73,30 +73,49 @@ WP-CLI should be used for bulk operations, database work, and anything the REST 
 | Search-replace URLs during migration | WP-CLI only |
 | Cron management | WP-CLI only |
 | Content export/import | WP-CLI or REST API |
-| Visual builders (tagDiv Composer, Elementor) | Playwright |
-| Plugin settings wizards (WooCommerce setup, LifterLMS) | Playwright |
-| Admin UI workflows that lack REST endpoints | Playwright |
+| Visual builders (tagDiv Composer, Elementor) | browser-use |
+| Plugin settings wizards (WooCommerce setup, LifterLMS) | browser-use |
+| Admin UI workflows that lack REST endpoints | browser-use |
 
 ---
 
-## Browser Automation via Playwright
+## Browser Automation via browser-use
 
-For tasks that require interacting with the WordPress admin UI — visual page builders, settings wizards, drag-and-drop editors, or any admin screen that lacks a REST API — use Playwright.
+For tasks that require interacting with the WordPress admin UI — visual page builders, settings wizards, drag-and-drop editors, or any admin screen that lacks a REST API — use **browser-use**, an AI-driven browser automation framework.
 
 ```bash
-# Install Playwright
-npm install playwright
-npx playwright install chromium
+pip install browser-use
+python -m playwright install chromium
 ```
 
-The agent should use Playwright to:
-1. **Log in** to wp-admin via the login form
-2. **Navigate** to the relevant admin page
-3. **Interact** with form fields, buttons, and UI elements
-4. **Wait** for AJAX requests to complete (WordPress admin is heavy on XHR)
-5. **Verify** the result
+The agent describes what it wants in natural language ("log in to wp-admin, go to WooCommerce > Settings, enable Stripe"). browser-use handles login, navigation, AJAX waits, and error recovery — far more resilient than hardcoded Playwright selectors.
 
-See `guides/browser-automation.md` for the full Playwright patterns, selectors, and workflows.
+```python
+from browser_use import Agent, Browser, ChatBrowserUse
+import asyncio
+
+async def main():
+    agent = Agent(
+        task="Go to https://example.com/wp-login.php, "
+             "log in as admin, navigate to Settings > General, "
+             "change site title to 'My New Blog', and save.",
+        llm=ChatBrowserUse(),
+        browser=Browser(),
+    )
+    await agent.run()
+
+asyncio.run(main())
+```
+
+To avoid re-authentication on every run, reuse a Chrome profile:
+
+```python
+from browser_use import BrowserProfile
+profile = BrowserProfile(storage_state_from_browser='chrome')
+browser = Browser(profile=profile)
+```
+
+See `guides/browser-automation.md` for the full browser-use reference, WordPress-specific recipe patterns, the Playwright fallback guide, and the decision table for when to use browser-use vs REST API vs WP-CLI.
 
 ---
 
@@ -764,9 +783,9 @@ See `guides/security-hardening.md` for the full hardening guide.
 
 ---
 
-## Browser Automation (Playwright)
+## Browser Automation (browser-use)
 
-For tasks that require the WordPress admin UI (tagDiv Composer, Customizer, settings wizards), use Playwright to automate the browser. See `guides/browser-automation.md` for the full guide with login patterns, selectors, navigation, and workflow examples.
+For tasks that require the WordPress admin UI (tagDiv Composer, Customizer, settings wizards), use browser-use — an AI-driven framework that handles login, navigation, AJAX waits, and error recovery from natural language descriptions. See `guides/browser-automation.md` for the full guide with WordPress recipe patterns and the Playwright fallback reference.
 
 ---
 
